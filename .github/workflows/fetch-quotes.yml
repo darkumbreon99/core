@@ -1,6 +1,8 @@
 name: build-fetch-quotes
 
 on:
+  push:
+    branches: [add-list-sellers]
   workflow_dispatch:
 
 jobs:
