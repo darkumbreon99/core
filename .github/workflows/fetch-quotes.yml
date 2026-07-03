@@ -1,0 +1,28 @@
+name: build-fetch-quotes
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        # swap-p2p is monero-sys-free, so no submodules / Monero C++ build needed.
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Build fetch_quotes example (swap-p2p, no monero)
+        run: cargo build --release -p swap-p2p --example fetch_quotes --features "fetch-quotes-example,test-support"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: fetch_quotes-windows-x86_64
+          path: target/release/examples/fetch_quotes.exe
+          if-no-files-found: error

@@ -131,20 +131,26 @@ async fn main() -> Result<()> {
                     rendezvous::discovery::Event::DiscoveredPeer { .. } => {}
                 },
                 BehaviourEvent::Quote(quotes_cached::Event::CachedQuotes { quotes }) => {
-                    println!("================");
-                    println!("================");
-                    println!("================");
-                    println!("==== !!!! GOT CACHED QUOTES SNAPSHOT !!!! ====");
-                    println!("All quotes:");
-                    for (peer, addr, quote, agent_version) in quotes {
-                        println!("- {peer} @ {addr}:");
-                        if let Some(version) = agent_version {
-                            println!("  - Agent Version: {version}");
-                        }
-                        println!("  - {:?}", quote);
-                        println!("================");
+                    // Machine-parseable, matches eigen_scan.py's key=value parser
+                    // (price is BTC per XMR, like the old 3.3.8 list-sellers output).
+                    for (peer, addr, quote, agent_version) in &quotes {
+                        println!(
+                            "price={:.8} BTC min_quantity={:.8} BTC max_quantity={:.8} BTC address={} peer_id={} version={}",
+                            quote.price.to_btc(),
+                            quote.min_quantity.to_btc(),
+                            quote.max_quantity.to_btc(),
+                            addr,
+                            peer,
+                            agent_version.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                        );
                     }
-                    // panic!("Got quote from peer, stopping");
+                    // One-shot: exit once we have a non-empty snapshot so the scanner
+                    // gets clean, flushed output instead of relying on a timeout kill.
+                    if !quotes.is_empty() {
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                        std::process::exit(0);
+                    }
                 }
                 _ => {}
             },
