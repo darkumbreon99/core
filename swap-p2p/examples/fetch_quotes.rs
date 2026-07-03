@@ -121,41 +121,51 @@ async fn main() -> Result<()> {
         );
     }
 
-    loop {
-        let event = swarm.select_next_some().await;
-        // println!("Event: {:?}", event);
+    // Discover for a fixed window, then print the fullest cached-quotes snapshot.
+    // emit_cached_quotes fires per QuoteReceived, so early snapshots are sparse; we
+    // keep the latest cumulative one (formatted to strings to dodge type plumbing)
+    // and print it once at the deadline. FETCH_QUOTES_SECS overrides the window.
+    let window = std::env::var("FETCH_QUOTES_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(90);
+    let deadline = tokio::time::sleep(Duration::from_secs(window));
+    tokio::pin!(deadline);
+    let mut latest_lines: Vec<String> = Vec::new();
 
-        match event {
-            libp2p::swarm::SwarmEvent::Behaviour(event) => match event {
-                BehaviourEvent::Rendezvous(event) => match event {
-                    rendezvous::discovery::Event::DiscoveredPeer { .. } => {}
-                },
-                BehaviourEvent::Quote(quotes_cached::Event::CachedQuotes { quotes }) => {
-                    // Machine-parseable, matches eigen_scan.py's key=value parser
-                    // (price is BTC per XMR, like the old 3.3.8 list-sellers output).
-                    for (peer, addr, quote, agent_version) in &quotes {
-                        println!(
-                            "price={:.8} BTC min_quantity={:.8} BTC max_quantity={:.8} BTC address={} peer_id={} version={}",
-                            quote.price.to_btc(),
-                            quote.min_quantity.to_btc(),
-                            quote.max_quantity.to_btc(),
-                            addr,
-                            peer,
-                            agent_version.as_ref().map(|v| v.to_string()).unwrap_or_default(),
-                        );
-                    }
-                    // One-shot: exit once we have a non-empty snapshot so the scanner
-                    // gets clean, flushed output instead of relying on a timeout kill.
-                    if !quotes.is_empty() {
-                        use std::io::Write;
-                        let _ = std::io::stdout().flush();
-                        std::process::exit(0);
-                    }
+    loop {
+        tokio::select! {
+            _ = &mut deadline => {
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                for line in &latest_lines {
+                    let _ = writeln!(out, "{line}");
                 }
-                _ => {}
-            },
-            libp2p::swarm::SwarmEvent::ConnectionEstablished { .. } => {}
-            _ => {}
+                let _ = out.flush();
+                std::process::exit(0);
+            }
+            event = swarm.select_next_some() => {
+                if let libp2p::swarm::SwarmEvent::Behaviour(BehaviourEvent::Quote(
+                    quotes_cached::Event::CachedQuotes { quotes },
+                )) = event
+                {
+                    // price is BTC per XMR; format matches eigen_scan.py's parser.
+                    latest_lines = quotes
+                        .iter()
+                        .map(|(peer, addr, quote, agent_version)| {
+                            format!(
+                                "price={:.8} BTC min_quantity={:.8} BTC max_quantity={:.8} BTC address={} peer_id={} version={}",
+                                quote.price.to_btc(),
+                                quote.min_quantity.to_btc(),
+                                quote.max_quantity.to_btc(),
+                                addr,
+                                peer,
+                                agent_version.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+                }
+            }
         }
     }
 }
