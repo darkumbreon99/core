@@ -48,6 +48,11 @@ OPTIONAL:
                                   so the funded internal wallet is shared)
     --electrum-rpc <URL>          Electrum RPC URL (repeatable; default: built-in)
     --no-tor                      Do not route libp2p over Tor (default: Tor on)
+    --tor-socks-port <PORT>       Route onion dials through an EXTERNAL Tor daemon's
+                                  SOCKS5 proxy on 127.0.0.1:<PORT> (e.g. Tor Browser =
+                                  9150, tor service = 9050) instead of the embedded arti
+                                  client. Far more reliable for onion services. Keep Tor
+                                  Browser / tor running while the swap executes.
     --testnet                     Use testnet / stagenet defaults
     -h, --help                    Show this help
 ";
@@ -59,6 +64,7 @@ struct Args {
     data_dir: Option<PathBuf>,
     electrum: Vec<String>,
     tor: bool,
+    tor_socks_port: Option<u16>,
     testnet: bool,
 }
 
@@ -69,6 +75,7 @@ fn parse_args() -> Result<Args> {
     let mut data_dir: Option<PathBuf> = None;
     let mut electrum: Vec<String> = Vec::new();
     let mut tor = true;
+    let mut tor_socks_port: Option<u16> = None;
     let mut testnet = false;
 
     let mut it = std::env::args().skip(1);
@@ -93,6 +100,10 @@ fn parse_args() -> Result<Args> {
                 electrum.push(it.next().context("--electrum-rpc requires a value")?);
             }
             "--no-tor" => tor = false,
+            "--tor-socks-port" => {
+                let v = it.next().context("--tor-socks-port requires a value")?;
+                tor_socks_port = Some(v.parse().context("invalid --tor-socks-port")?);
+            }
             "--testnet" => testnet = true,
             "-h" | "--help" => {
                 print!("{HELP}");
@@ -109,6 +120,7 @@ fn parse_args() -> Result<Args> {
         data_dir,
         electrum,
         tor,
+        tor_socks_port,
         testnet,
     })
 }
@@ -123,6 +135,18 @@ async fn main() -> Result<()> {
         .expect("failed to install default rustls provider");
 
     let args = parse_args()?;
+
+    // Route onion dials through an external Tor daemon's SOCKS5 proxy instead of the
+    // embedded arti client (libp2p-tor reads this env var in its transport `dial`).
+    // Set here, at startup, before the Context builds the swarm and any dial happens —
+    // no other thread reads the env yet, so this is sound despite `set_var` being
+    // `unsafe` in the 2024 edition.
+    if let Some(port) = args.tor_socks_port {
+        unsafe {
+            std::env::set_var("SWAP_TOR_SOCKS_PORT", port.to_string());
+        }
+        tracing::info!(port, "Routing onion dials via external Tor SOCKS5 proxy");
+    }
 
     // The seller multiaddr must carry the peer id we auto-select.
     let seller_peer_id = args

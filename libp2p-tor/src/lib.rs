@@ -88,7 +88,7 @@ mod address;
 mod dial_limiter;
 mod provider;
 
-use address::{dangerous_extract, safe_extract};
+use address::{dangerous_extract, extract_socks_target, safe_extract};
 use dial_limiter::extract_peer_id;
 pub use dial_limiter::{
     TorDialLimiter, TorDialLimiterError, TorDialPermit, TorDialPriority, TorDialPriorityConfig,
@@ -341,12 +341,21 @@ impl TorTransport {
     }
 }
 
+/// Reads `SWAP_TOR_SOCKS_PORT`; when set to a valid port, onion dials are routed
+/// through an external Tor daemon's SOCKS5 proxy on `127.0.0.1:<port>` instead of the
+/// embedded arti client (whose hidden-service circuits are unreliable). Absent => arti.
+fn external_socks_port() -> Option<u16> {
+    std::env::var("SWAP_TOR_SOCKS_PORT").ok()?.trim().parse().ok()
+}
+
 #[derive(Debug, Error)]
 pub enum TorTransportError {
     #[error(transparent)]
     Client(#[from] TorError),
     #[error(transparent)]
     DialLimiter(#[from] TorDialLimiterError),
+    #[error("external Tor SOCKS5 proxy dial failed: {0}")]
+    Socks(#[from] tokio_socks::Error),
     #[cfg(feature = "listen-onion-service")]
     #[error(transparent)]
     Service(#[from] tor_hsservice::ClientError),
@@ -473,6 +482,12 @@ impl Transport for TorTransport {
         let dial_limiter = self.dial_limiter.clone();
         let peer_id = extract_peer_id(&addr);
 
+        // If an external Tor SOCKS5 port is configured, route this dial through it
+        // (via the target's `.onion`/DNS host) instead of arti. Falls back to arti when
+        // unset or when the address isn't SOCKS-routable.
+        let socks_target = external_socks_port()
+            .and_then(|port| extract_socks_target(&addr).map(|(host, host_port)| (port, host, host_port)));
+
         Ok(Box::pin(async move {
             // Hold the dial permit for the entire duration of the dial: the slot
             // is only freed once `_dial_permit` is dropped at the end of this
@@ -482,11 +497,24 @@ impl Transport for TorTransport {
                 None => None,
             };
 
-            let stream = onion_client.connect(tor_address).await?;
+            let stream = match socks_target {
+                Some((socks_port, host, host_port)) => {
+                    tracing::debug!(%addr, socks_port, "Dialing peer via external Tor SOCKS5 proxy");
+                    let socks = tokio_socks::tcp::Socks5Stream::connect(
+                        ("127.0.0.1", socks_port),
+                        (host.as_str(), host_port),
+                    )
+                    .await?;
+                    TokioTorStream::from(socks.into_inner())
+                }
+                None => {
+                    let stream = onion_client.connect(tor_address).await?;
+                    tracing::debug!(%addr, "Established connection to peer through Tor");
+                    TokioTorStream::from(stream)
+                }
+            };
 
-            tracing::debug!(%addr, "Established connection to peer through Tor");
-
-            Ok(TokioTorStream::from(stream))
+            Ok(stream)
         }))
     }
 

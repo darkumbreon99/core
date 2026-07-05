@@ -51,6 +51,29 @@ pub fn safe_extract(multiaddr: &Multiaddr) -> Option<TorAddr> {
     Some(tor_addr)
 }
 
+/// Extract a `(host, port)` target for a SOCKS5 CONNECT from the provided [`Multiaddr`].
+///
+/// For onion3 addresses this returns the lowercase `<b32>.onion` domain and its port;
+/// for DNS addresses the domain and port. The returned host is passed to the SOCKS5
+/// proxy as a *domain* (Tor resolves it), so the local process never resolves `.onion`.
+/// Used to route the dial through an external Tor daemon's SOCKS5 port instead of arti.
+pub fn extract_socks_target(multiaddr: &Multiaddr) -> Option<(String, u16)> {
+    let mut protocols = multiaddr.into_iter();
+    match (protocols.next()?, protocols.next()) {
+        (Protocol::Onion3(addr), _) => {
+            let host = data_encoding::BASE32
+                .encode(addr.hash())
+                .to_ascii_lowercase();
+            Some((format!("{host}.onion"), addr.port()))
+        }
+        (
+            Protocol::Dns(domain) | Protocol::Dns4(domain) | Protocol::Dns6(domain),
+            Some(Protocol::Tcp(port)),
+        ) => Some((domain.to_string(), port)),
+        _ => None,
+    }
+}
+
 fn libp2p_onion_address_to_domain_and_port<'a>(
     onion_address: &'a Onion3Addr<'_>,
 ) -> (&'a str, u16) {
