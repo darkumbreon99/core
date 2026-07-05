@@ -10,6 +10,15 @@ name = "swap"
 
 [features]
 tauri = ["dep:tauri"]
+# Gate for the headless BTC->XMR swap executor example (see examples/buy_xmr_cli.rs).
+# Kept behind a feature so normal `cargo build`/`cargo test` don't compile it.
+buy-xmr-cli-example = []
+
+# Headless BTC->XMR swap executor (restores non-interactive `buy-xmr` on top of the
+# 4.x library). Build: cargo build -p swap --example buy_xmr_cli --features buy-xmr-cli-example
+[[example]]
+name = "buy_xmr_cli"
+required-features = ["buy-xmr-cli-example"]
 
 [dependencies]
 # Bitcoin Dev Kit

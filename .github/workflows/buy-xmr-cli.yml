@@ -1,0 +1,79 @@
+name: build-buy-xmr-cli
+
+# Builds the headless BTC->XMR swap executor (swap/examples/buy_xmr_cli.rs).
+# The full `swap` crate pulls in monero-sys (C++) + arti/tor, so unlike the
+# swap-p2p-only fetch_quotes example this mirrors the release build environment:
+# cross-compile to Windows from Ubuntu via the shared setup-build-environment action.
+
+on:
+  push:
+    branches: [buy-xmr-cli]
+  workflow_dispatch:
+
+jobs:
+  # Fast(er) compile check on native Linux. Gates the slow Windows cross build so
+  # we iterate on type/borrow errors without paying for gcc-from-source each time.
+  check-linux:
+    name: Compile check (linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-environment
+        with:
+          host: ubuntu-22.04
+          target: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          key: buy-xmr-cli-linux
+
+      - name: Build buy_xmr_cli example (native linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p swap --example buy_xmr_cli --features buy-xmr-cli-example
+
+      - name: Upload linux binary (compile proof)
+        uses: actions/upload-artifact@v4
+        with:
+          name: buy_xmr_cli-linux-x86_64
+          path: target/release/examples/buy_xmr_cli
+          if-no-files-found: error
+
+  build-windows:
+    name: Build buy_xmr_cli.exe (windows cross)
+    needs: check-linux
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup build environment (cross -> windows)
+        uses: ./.github/actions/setup-build-environment
+        with:
+          host: ubuntu-22.04
+          target: x86_64-pc-windows-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          key: buy-xmr-cli-windows
+
+      - name: Build buy_xmr_cli example (x86_64-pc-windows-gnu)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release -p swap --example buy_xmr_cli \
+            --features buy-xmr-cli-example \
+            --target x86_64-pc-windows-gnu
+
+      - name: Upload buy_xmr_cli.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: buy_xmr_cli-windows-x86_64
+          path: target/x86_64-pc-windows-gnu/release/examples/buy_xmr_cli.exe
+          if-no-files-found: error
