@@ -115,6 +115,13 @@ fn parse_args() -> Result<Args> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Same startup step the `swap` binary performs (swap/src/bin/swap.rs): rustls 0.23
+    // can't auto-select a crypto provider when several are in the dependency graph, so
+    // arti/tor would panic without this. Must run before any TLS is used.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install default rustls provider");
+
     let args = parse_args()?;
 
     // The seller multiaddr must carry the peer id we auto-select.
